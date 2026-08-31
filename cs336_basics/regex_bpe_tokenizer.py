@@ -14,6 +14,7 @@ from collections import defaultdict, Counter
 from concurrent.futures import ProcessPoolExecutor
 from cs336_basics.pretokenization_example import find_chunk_boundaries
 from typing import Iterator
+from copy import deepcopy
 
 
 
@@ -66,13 +67,66 @@ def mp_regex(
 
 
 
-def find_pairs(pre_token_count: dict[tuple[bytes, ...], int]) -> dict[tuple[bytes, bytes], int]:
+def find_pairs(pre_token_count: dict[tuple[bytes, ...], int]) -> tuple[dict[tuple[bytes, bytes], int], dict[tuple[bytes, bytes], set[tuple[bytes, ...]]]]:
     
     pairs: dict[tuple[bytes, bytes], int] = defaultdict(int)
+    reverse_pair: dict[tuple[bytes, bytes], set[tuple[bytes, ...]]] = defaultdict(set)
+
     for tpl, appear in pre_token_count.items():
         for i in range(len(tpl)-1):
             pairs[(tpl[i], tpl[i+1])] += appear
-    return pairs
+            reverse_pair[(tpl[i], tpl[i+1])].add(tpl)
+    return pairs, reverse_pair
+
+
+
+
+def pair_diff(
+            word: tuple[bytes, ...],
+            pre_token_count: dict[tuple[bytes, ...], int]
+        ) -> dict[tuple[bytes, bytes], int]:
+    pair_dict: dict[tuple[bytes, bytes], int] = defaultdict(int)
+    for i in range(len(word)-1):
+        pair_dict[(word[i], word[i+1])] += pre_token_count[word]
+    return pair_dict
+
+def remove_word_from_pair(
+                        word: tuple[bytes, ...], 
+                        pair_dict: dict[tuple[bytes, bytes], int], 
+                        reverse_pair: dict[tuple[bytes, bytes], set[tuple[bytes, ...]]]
+                        ) -> dict[tuple[bytes, bytes], set[tuple[bytes, ...]]]:
+    for p in pair_dict:
+        reverse_pair[p].remove(word)
+    return reverse_pair
+
+def add_word_to_pair(
+                    word: tuple[bytes, ...], 
+                    pair_dict: dict[tuple[bytes, bytes], int], 
+                    reverse_pair: dict[tuple[bytes, bytes], set[tuple[bytes, ...]]]
+                    ) -> dict[tuple[bytes, bytes], set[tuple[bytes, ...]]]:
+    for p in pair_dict:
+        reverse_pair[p].add(word)
+    return reverse_pair
+
+
+def global_delta_pair(
+                    old_pair_dict: dict[tuple[bytes, bytes], int], 
+                    new_pair_dict: dict[tuple[bytes, bytes], int], 
+                    global_pair_dict: dict[tuple[bytes, bytes], int],
+                    reverse_pair: dict[tuple[bytes, bytes], set[tuple[bytes, ...]]]
+                    ) -> dict[tuple[bytes, bytes], set[tuple[bytes, ...]]]:
+    
+    delta_pair: dict[tuple[bytes, bytes], int] = {}
+    delta_pair.update(old_pair_dict)
+    delta_pair.update(new_pair_dict)
+    for dp in delta_pair:
+        delta_pair[dp] = old_pair_dict.get(dp, 0) - new_pair_dict.get(dp, 0)
+        if global_pair_dict.get(dp, 0) - delta_pair.get(dp, 0) == 0:
+            del global_pair_dict[dp]
+            del reverse_pair[dp]
+        elif global_pair_dict.get(dp, 0) - delta_pair.get(dp, 0) > 0:
+            global_pair_dict[dp] = global_pair_dict.get(dp, 0) - delta_pair.get(dp, 0)
+    return reverse_pair
 
 
 
@@ -81,43 +135,53 @@ def find_pairs(pre_token_count: dict[tuple[bytes, ...], int]) -> dict[tuple[byte
 def merge(
         pre_token_count: dict[tuple[bytes, ...], int], 
         pair: tuple[bytes, bytes], 
+        reverse_pair: dict[tuple[bytes, bytes], set[tuple[bytes, ...]]],
+        pairs: dict[tuple[bytes, bytes], int],
         verbose: bool = False
-    ) -> dict[tuple[bytes, ...], int]:
+    ) -> tuple[dict[tuple[bytes, ...], int], dict[tuple[bytes, bytes], set[tuple[bytes, ...]]]]:
     
     total_merges: int = 0
-    new_token_count: dict[tuple[bytes, ...], int] = defaultdict(int)
-    
-    for tpl, appear in pre_token_count.items():
+    words: set[tuple[bytes, ...]] = deepcopy(reverse_pair[pair])
+
+    for word in words:
         i = 0
+        n = len(word)
         end_flag: bool = False
         merge_happen: bool = False
-        new_tpl: list[bytes] = []
-        
-        if len(tpl) < 2:
-            new_token_count[tpl] = appear
-            continue
-            
-        while i < len(tpl)-1:
-            if (pair[0], pair[1]) == (tpl[i], tpl[i+1]):
-                new_tpl.append(pair[0]+pair[1])
-                end_flag = True if i == len(tpl)-2 else False
+        merged_word: list[bytes] = []
+        appear: int = pre_token_count[word]
+
+        old_pair_dict = pair_diff(word, pre_token_count)
+        reverse_pair = remove_word_from_pair(word, old_pair_dict, reverse_pair)
+
+        while i < n-1:
+            if (pair[0], pair[1]) == (word[i], word[i+1]):
+                merged_word.append(pair[0]+pair[1])
+                end_flag = True if i == n-2 else False
                 merge_happen = True
                 i += 2
                 total_merges += 1
                 continue
-            new_tpl.append(tpl[i])
+            merged_word.append(word[i])
             i += 1
-            
+
         if not end_flag:
-            new_tpl.append(tpl[-1])
-             
-        new_token_count[tuple(new_tpl)] = appear
+            merged_word.append(word[-1])
+
+        new_tpl: tuple[bytes, ...] = tuple(merged_word)
+
+        del pre_token_count[word]
+        pre_token_count[new_tpl] = appear
+        
+        new_pair_dict = pair_diff(new_tpl, pre_token_count)
+        reverse_pair = add_word_to_pair(new_tpl, new_pair_dict, reverse_pair)
+
+        reverse_pair = global_delta_pair(old_pair_dict, new_pair_dict, global_pair_dict=pairs, reverse_pair=reverse_pair)
+
         if verbose and merge_happen:
-            print(f"Merge Successful with {pair=} resulting in new string {tuple(new_tpl)=}")
-    
-    if verbose:
-        print(f"Total merges: {total_merges}")
-    return new_token_count
+            print(f"Merge Successful with {pair=} resulting in new string {new_tpl=}")
+
+    return pre_token_count, reverse_pair
 
 
 
@@ -137,7 +201,7 @@ def train(
 
     # Chunking file / finding chunk boundaries
     with open(input_path, "rb") as f:
-        num_processes = 1
+        num_processes = 8
         boundaries = find_chunk_boundaries(f, num_processes, b"<|endoftext|>")
 
     start = boundaries[:-1]
@@ -153,10 +217,12 @@ def train(
                                                             end=end, 
                                                             num_workers=num_processes
                                                             )
+    # print(len(pre_token_count))
     
+    pairs, reverse_pair = find_pairs(pre_token_count)
+
     # Merge Steps
     for _ in range(merge_iters):
-        pairs: dict[tuple[bytes, bytes], int] = find_pairs(pre_token_count)
         max_pair: tuple[bytes, bytes] = max(pairs, key=lambda k: (pairs[k], k))
 
         v_idx: int = max(i2b_vocab) + 1
@@ -167,7 +233,7 @@ def train(
         i2b_vocab[v_idx] = b_string
         # b2i_vocab[b_string] = v_idx
         
-        pre_token_count = merge(pre_token_count, max_pair)
+        pre_token_count, reverse_pair = merge(pre_token_count, pair=max_pair, reverse_pair=reverse_pair, pairs=pairs)
 
     # Appending special_tokens to the vocabulary
     for token in special_tokens:
@@ -179,6 +245,7 @@ def train(
 
 # Example Usage
 if __name__ == "__main__":
+    import pstats
     from cProfile import Profile
 
     train_data = "/media/nightking/WD-SN570/deep_learning/stanford_cs336/assignment1-basics/tests/fixtures/corpus.en"
@@ -187,10 +254,9 @@ if __name__ == "__main__":
         i2b_vocab, merge_order = train(input_path=train_data, vocab_size=500, special_tokens=["<|endoftext|>"])
     prof.dump_stats("train.prof")
 
-    import pstats
     stats = pstats.Stats("train.prof")
     stats.sort_stats("cumtime").print_stats(15)      # top 15 by cumulative time
-    stats.print_callers("find_pairs")                # who calls into find_pairs?
+    stats.print_callers("find_pairs")                # who calls into find_pairs
 
     print(f"{'Length of Vocab':<50}: {len(i2b_vocab)}\n")
     # print("-"*54)
