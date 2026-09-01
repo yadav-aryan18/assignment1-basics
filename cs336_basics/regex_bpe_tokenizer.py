@@ -7,6 +7,8 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 import os
+import json
+import pickle
 import regex as re
 from itertools import repeat
 import multiprocessing as mp
@@ -220,12 +222,14 @@ def train(
     # print(len(pre_token_count))
     
     pairs, reverse_pair = find_pairs(pre_token_count)
+    
+    v_idx: int = len(i2b_vocab) - 1
 
     # Merge Steps
     for _ in range(merge_iters):
         max_pair: tuple[bytes, bytes] = max(pairs, key=lambda k: (pairs[k], k))
 
-        v_idx: int = max(i2b_vocab) + 1
+        v_idx += 1
         b_string: bytes = max_pair[0] + max_pair[1]
 
         merge_order.append(max_pair)
@@ -240,6 +244,165 @@ def train(
         i2b_vocab[max(i2b_vocab)+1] = token.encode('utf-8')
 
     return i2b_vocab, merge_order
+
+
+def save_checkpoint(vocab: dict[int, bytes], merges: list[tuple[bytes, bytes]]) -> None:
+    save_vocab = {i: j.decode("latin-1") for i, j in vocab.items()}
+
+    with open("vocab.json", "w", encoding="latin-1") as f1:
+        json.dump(save_vocab, f1, indent=4)
+
+    with open("merges.pkl", "wb") as f2:
+        pickle.dump(merges, f2)
+
+    print(f"Files saved....")
+
+    return
+
+
+
+class Tokenizer:
+    def __init__(
+            self, 
+            vocab: dict[int, bytes], 
+            merges: list[tuple[bytes, bytes]], 
+            special_tokens: list[str] | None = None
+            ):
+
+        self.vocab = vocab
+        self.merges = merges
+        self.special_tokens = special_tokens
+        self.reverse_vocab = {y: x for x, y in vocab.items()}
+        self.merge_lookup = {y: x for x, y in enumerate(merges)}
+        self.PATTERN = re.compile(r"""'(?:[sdmt]|ll|ve|re)| ?\p{L}+| ?\p{N}+| ?[^\s\p{L}\p{N}]+|\s+(?!\S)|\s+""")
+        self.stkns_2_id = {}
+
+        if self.special_tokens:
+            self.special_tokens.sort(reverse=True, key=lambda x: len(x))
+            self.stkns_2_id = {token.encode('utf-8'): self.reverse_vocab[token.encode('utf-8')] for token in self.special_tokens}
+
+
+    @classmethod
+    def from_files(
+            cls, 
+            vocab_filepath: str,
+            merges_filepath: str,
+            special_tokens: list[str] | None = None
+        ):
+
+        # Load vocabulary dict
+        with open(vocab_filepath, 'r') as file1:
+            vocab = json.load(file1)
+
+        vocab = {int(i): j.encode("latin-1") for i, j in vocab.items()}
+        
+        # Load merges order list
+        with open(merges_filepath, 'rb') as file2:
+            merges = pickle.load(file2)
+
+        return cls(vocab, merges, special_tokens)
+
+
+
+    def encode(self, text: str) -> list[int]:
+
+        encoded_list: list[int] = []
+        
+        if self.special_tokens:
+            special_pattern = "|".join([re.escape(token) for token in self.special_tokens])
+            text: list[str] = re.split(f"""({special_pattern})""", text)
+        else:
+            text = [text]
+
+        for chunk_split in text:
+            if chunk_split == "":
+                continue
+            elif chunk_split.encode('utf-8') in self.stkns_2_id:
+                encoded_list.append(self.stkns_2_id[chunk_split.encode('utf-8')])
+                continue
+            pre_tokens: list[tuple[bytes, ...]] = []
+            for m in re.finditer(self.PATTERN, chunk_split):
+                bytes_tuple = tuple(bytes([ch]) for ch in m.group(0).encode('utf-8'))
+                pre_tokens.append(bytes_tuple)
+
+            for w_idx, word in enumerate(pre_tokens):
+                word_copy = list(word)
+
+                for _ in range(len(word)-1):
+                    n = len(word_copy)
+                    min_rank: tuple[int | float, tuple[bytes, bytes]] = (float('inf'), (b"", b""))  #Placeholder bytes for type annotations
+
+                    for i in range(n-1):
+                        ml_pair: int | float = self.merge_lookup.get((word_copy[i], word_copy[i+1]), float('inf'))
+                        min_rank = min(min_rank, (ml_pair, (word_copy[i], word_copy[i+1])))
+
+                    if min_rank[0] == float('inf'):
+                        break
+
+                    for j in range(n-1, 0, -1):
+                        if (word_copy[j-1], word_copy[j]) == min_rank[1]:
+                            word_copy[j] = word_copy[j-1] + word_copy[j]
+                            del word_copy[j-1]
+                pre_tokens[w_idx] = tuple(word_copy)
+
+            encoded_list += [self.reverse_vocab[x] for token in pre_tokens for x in token]
+
+        return encoded_list
+
+
+    def encode_iterable(self, iterable: Iterable[str]) -> Iterator[int]:
+
+        for line_text in iterable:
+            # encoded_list: list[int] = []
+            
+            if self.special_tokens:
+                special_pattern = "|".join([re.escape(token) for token in self.special_tokens])
+                text: list[str] = re.split(f"""({special_pattern})""", line_text)
+            else:
+                text = [line_text]
+
+            for chunk_split in text:
+                if chunk_split == "":
+                    continue
+                elif chunk_split.encode('utf-8') in self.stkns_2_id:
+                    # encoded_list.append(self.stkns_2_id[chunk_split.encode('utf-8')])
+                    yield self.stkns_2_id[chunk_split.encode('utf-8')]
+                    continue
+                pre_tokens: list[tuple[bytes, ...]] = []
+                for m in re.finditer(self.PATTERN, chunk_split):
+                    bytes_tuple = tuple(bytes([ch]) for ch in m.group(0).encode('utf-8'))
+                    pre_tokens.append(bytes_tuple)
+
+                for word in pre_tokens:
+                    word_copy = list(word)
+
+                    for _ in range(len(word)-1):
+                        n = len(word_copy)
+                        min_rank: tuple[int | float, tuple[bytes, bytes]] = (float('inf'), (b"", b""))  #Placeholder bytes for type annotations
+
+                        for i in range(n-1):
+                            ml_pair: int | float = self.merge_lookup.get((word_copy[i], word_copy[i+1]), float('inf'))
+                            min_rank = min(min_rank, (ml_pair, (word_copy[i], word_copy[i+1])))
+
+                        if min_rank[0] == float('inf'):
+                            break
+
+                        for j in range(n-1, 0, -1):
+                            if (word_copy[j-1], word_copy[j]) == min_rank[1]:
+                                word_copy[j] = word_copy[j-1] + word_copy[j]
+                                del word_copy[j-1]
+                    merged_word = tuple(word_copy)
+                    # pre_tokens[w_idx] = merged_word
+
+                    for token in merged_word:
+                            yield self.reverse_vocab[token]
+
+
+    def decode(self, ids: list[int]) -> str:
+        byte_string = [self.vocab[i] for i in ids]
+        return b"".join(byte_string).decode('utf-8', errors='replace')
+
+
         
 
 
