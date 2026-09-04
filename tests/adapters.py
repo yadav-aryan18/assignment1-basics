@@ -25,6 +25,12 @@ from cs336_basics.transformer_lm import (
                                         CausalMultiHeadSelfAttention,
                                         CausalMHSAwithRoPE
                                         )
+from cs336_basics.transformer_lm_backward import(
+                                        crossEntropyLoss,
+                                        AdamW,
+                                        cosineAnnealingScheduler,
+                                        gradient_clipping
+                                        )
 
 def run_linear(
     d_in: int,
@@ -564,7 +570,8 @@ def run_cross_entropy(
     Returns:
         Float[Tensor, ""]: The average cross-entropy loss across examples.
     """
-    raise NotImplementedError
+    return crossEntropyLoss(inputs, targets)
+    # raise NotImplementedError
 
 
 def run_gradient_clipping(parameters: Iterable[torch.nn.Parameter], max_l2_norm: float) -> None:
@@ -576,14 +583,16 @@ def run_gradient_clipping(parameters: Iterable[torch.nn.Parameter], max_l2_norm:
 
     The gradients of the parameters (parameter.grad) should be modified in-place.
     """
-    raise NotImplementedError
+    gradient_clipping(parameters, max_l2_norm)
+    # raise NotImplementedError
 
 
 def get_adamw_cls() -> Any:
     """
     Returns a torch.optim.Optimizer that implements AdamW.
     """
-    raise NotImplementedError
+    return AdamW
+    # raise NotImplementedError
 
 
 def run_get_lr_cosine_schedule(
@@ -611,7 +620,9 @@ def run_get_lr_cosine_schedule(
     Returns:
         Learning rate at the given iteration under the specified schedule.
     """
-    raise NotImplementedError
+    lr = cosineAnnealingScheduler(max_learning_rate, min_learning_rate, it, warmup_iters, cosine_cycle_iters)
+    return lr
+    # raise NotImplementedError
 
 
 def run_save_checkpoint(
