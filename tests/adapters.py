@@ -32,6 +32,16 @@ from cs336_basics.transformer_lm_backward import(
                                         gradient_clipping
                                         )
 
+from cs336_basics.training_loop import (
+                                        data_loading,
+                                        save_checkpoint,
+                                        load_checkpoint
+                                        )
+
+
+
+
+
 def run_linear(
     d_in: int,
     d_out: int,
@@ -534,7 +544,8 @@ def run_get_batch(
         is the sampled input sequences, and the second tuple item is the corresponding
         language modeling labels.
     """
-    raise NotImplementedError
+    return data_loading(dataset, batch_size, context_length, device)
+    # raise NotImplementedError
 
 
 def run_softmax(in_features: Float[Tensor, " ..."], dim: int) -> Float[Tensor, " ..."]:
@@ -641,7 +652,9 @@ def run_save_checkpoint(
             we've completed.
         out (str | os.PathLike | BinaryIO | IO[bytes]): Path or file-like object to serialize the model, optimizer, and iteration to.
     """
-    raise NotImplementedError
+    save_checkpoint(model, optimizer, iteration, out)
+    # raise NotImplementedError
+
 
 
 def run_load_checkpoint(
@@ -662,7 +675,9 @@ def run_load_checkpoint(
     Returns:
         int: the previously-serialized number of iterations.
     """
-    raise NotImplementedError
+    model, optimizer, epoch = load_checkpoint(src, model, optimizer)
+    return epoch
+    # raise NotImplementedError
 
 
 def get_tokenizer(

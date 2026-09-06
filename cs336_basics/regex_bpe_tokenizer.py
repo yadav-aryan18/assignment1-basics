@@ -23,12 +23,12 @@ from copy import deepcopy
 PATTERN = re.compile(r"""'(?:[sdmt]|ll|ve|re)| ?\p{L}+| ?\p{N}+| ?[^\s\p{L}\p{N}]+|\s+(?!\S)|\s+""")
 
 def pre_tokenization(
-                    file_path: str, 
+                    file_path: str,
                     special_tokens: list[str],
-                    begin: int, 
+                    begin: int,
                     terminate: int
                 ) -> dict[tuple[bytes, ...], int]:
-    
+
     with open(file_path, 'rb') as f:
         f.seek(begin)
         chunk = f.read(terminate - begin).decode("utf-8", errors="ignore")
@@ -47,18 +47,18 @@ def pre_tokenization(
 
 
 def mp_regex(
-            file_path: str, 
+            file_path: str,
             special_tokens: list[str],
-            start: list[int] , 
-            end: list[int], 
+            start: list[int] ,
+            end: list[int],
             num_workers: int | None = os.cpu_count()
         ) -> dict[tuple[bytes, ...], int]:
 
     ctx = mp.get_context("fork")
-    
+
     with ProcessPoolExecutor(max_workers=num_workers, mp_context=ctx) as executor:
         results: Iterator[dict[tuple[bytes, ...], int]] = executor.map(pre_tokenization, repeat(file_path), repeat(special_tokens), start, end)
-        
+
     pre_token_counts: Counter[tuple[bytes, ...]] = Counter()
     for worker_dict in results:
         pre_token_counts.update(worker_dict)
@@ -70,7 +70,7 @@ def mp_regex(
 
 
 def find_pairs(pre_token_count: dict[tuple[bytes, ...], int]) -> tuple[dict[tuple[bytes, bytes], int], dict[tuple[bytes, bytes], set[tuple[bytes, ...]]]]:
-    
+
     pairs: dict[tuple[bytes, bytes], int] = defaultdict(int)
     reverse_pair: dict[tuple[bytes, bytes], set[tuple[bytes, ...]]] = defaultdict(set)
 
@@ -93,8 +93,8 @@ def pair_diff(
     return pair_dict
 
 def remove_word_from_pair(
-                        word: tuple[bytes, ...], 
-                        pair_dict: dict[tuple[bytes, bytes], int], 
+                        word: tuple[bytes, ...],
+                        pair_dict: dict[tuple[bytes, bytes], int],
                         reverse_pair: dict[tuple[bytes, bytes], set[tuple[bytes, ...]]]
                         ) -> dict[tuple[bytes, bytes], set[tuple[bytes, ...]]]:
     for p in pair_dict:
@@ -102,8 +102,8 @@ def remove_word_from_pair(
     return reverse_pair
 
 def add_word_to_pair(
-                    word: tuple[bytes, ...], 
-                    pair_dict: dict[tuple[bytes, bytes], int], 
+                    word: tuple[bytes, ...],
+                    pair_dict: dict[tuple[bytes, bytes], int],
                     reverse_pair: dict[tuple[bytes, bytes], set[tuple[bytes, ...]]]
                     ) -> dict[tuple[bytes, bytes], set[tuple[bytes, ...]]]:
     for p in pair_dict:
@@ -112,12 +112,12 @@ def add_word_to_pair(
 
 
 def global_delta_pair(
-                    old_pair_dict: dict[tuple[bytes, bytes], int], 
-                    new_pair_dict: dict[tuple[bytes, bytes], int], 
+                    old_pair_dict: dict[tuple[bytes, bytes], int],
+                    new_pair_dict: dict[tuple[bytes, bytes], int],
                     global_pair_dict: dict[tuple[bytes, bytes], int],
                     reverse_pair: dict[tuple[bytes, bytes], set[tuple[bytes, ...]]]
                     ) -> dict[tuple[bytes, bytes], set[tuple[bytes, ...]]]:
-    
+
     delta_pair: dict[tuple[bytes, bytes], int] = {}
     delta_pair.update(old_pair_dict)
     delta_pair.update(new_pair_dict)
@@ -135,13 +135,13 @@ def global_delta_pair(
 
 
 def merge(
-        pre_token_count: dict[tuple[bytes, ...], int], 
-        pair: tuple[bytes, bytes], 
+        pre_token_count: dict[tuple[bytes, ...], int],
+        pair: tuple[bytes, bytes],
         reverse_pair: dict[tuple[bytes, bytes], set[tuple[bytes, ...]]],
         pairs: dict[tuple[bytes, bytes], int],
         verbose: bool = False
     ) -> tuple[dict[tuple[bytes, ...], int], dict[tuple[bytes, bytes], set[tuple[bytes, ...]]]]:
-    
+
     total_merges: int = 0
     words: set[tuple[bytes, ...]] = deepcopy(reverse_pair[pair])
 
@@ -174,7 +174,7 @@ def merge(
 
         del pre_token_count[word]
         pre_token_count[new_tpl] = appear
-        
+
         new_pair_dict = pair_diff(new_tpl, pre_token_count)
         reverse_pair = add_word_to_pair(new_tpl, new_pair_dict, reverse_pair)
 
@@ -192,13 +192,13 @@ def merge(
 
 def train(
         input_path: str,
-        vocab_size: int, 
+        vocab_size: int,
         special_tokens: list[str]
     ) -> tuple[dict[int, bytes], list[tuple[bytes, bytes]]]:
-    
+
     i2b_vocab: dict[int, bytes] = {x: bytes([x]) for x in range(256)}
-    merge_iters: int = vocab_size - (len(i2b_vocab) + len(special_tokens))        
-    
+    merge_iters: int = vocab_size - (len(i2b_vocab) + len(special_tokens))
+
     merge_order: list[tuple[bytes, bytes]] = []
 
     # Chunking file / finding chunk boundaries
@@ -208,21 +208,21 @@ def train(
 
     start = boundaries[:-1]
     end = boundaries[1:]
-    
+
     # print(f"{start}\n{end}")
 
     # Parallelilzing pre-tokenization using lazy RegEx (re.finditer)
     pre_token_count: dict[tuple[bytes, ...], int] = mp_regex(
-                                                            file_path=input_path, 
-                                                            special_tokens=special_tokens, 
-                                                            start=start, 
-                                                            end=end, 
+                                                            file_path=input_path,
+                                                            special_tokens=special_tokens,
+                                                            start=start,
+                                                            end=end,
                                                             num_workers=num_processes
                                                             )
     # print(len(pre_token_count))
-    
+
     pairs, reverse_pair = find_pairs(pre_token_count)
-    
+
     v_idx: int = len(i2b_vocab) - 1
 
     # Merge Steps
@@ -236,7 +236,7 @@ def train(
 
         i2b_vocab[v_idx] = b_string
         # b2i_vocab[b_string] = v_idx
-        
+
         pre_token_count, reverse_pair = merge(pre_token_count, pair=max_pair, reverse_pair=reverse_pair, pairs=pairs)
 
     # Appending special_tokens to the vocabulary
@@ -263,9 +263,9 @@ def save_checkpoint(vocab: dict[int, bytes], merges: list[tuple[bytes, bytes]]) 
 
 class Tokenizer:
     def __init__(
-            self, 
-            vocab: dict[int, bytes], 
-            merges: list[tuple[bytes, bytes]], 
+            self,
+            vocab: dict[int, bytes],
+            merges: list[tuple[bytes, bytes]],
             special_tokens: list[str] | None = None
             ):
 
@@ -284,7 +284,7 @@ class Tokenizer:
 
     @classmethod
     def from_files(
-            cls, 
+            cls,
             vocab_filepath: str,
             merges_filepath: str,
             special_tokens: list[str] | None = None
@@ -295,7 +295,7 @@ class Tokenizer:
             vocab = json.load(file1)
 
         vocab = {int(i): j.encode("latin-1") for i, j in vocab.items()}
-        
+
         # Load merges order list
         with open(merges_filepath, 'rb') as file2:
             merges = pickle.load(file2)
@@ -307,7 +307,7 @@ class Tokenizer:
     def encode(self, text: str) -> list[int]:
 
         encoded_list: list[int] = []
-        
+
         if self.special_tokens:
             special_pattern = "|".join([re.escape(token) for token in self.special_tokens])
             text: list[str] = re.split(f"""({special_pattern})""", text)
@@ -354,7 +354,7 @@ class Tokenizer:
 
         for line_text in iterable:
             # encoded_list: list[int] = []
-            
+
             if self.special_tokens:
                 special_pattern = "|".join([re.escape(token) for token in self.special_tokens])
                 text: list[str] = re.split(f"""({special_pattern})""", line_text)
@@ -403,7 +403,7 @@ class Tokenizer:
         return b"".join(byte_string).decode('utf-8', errors='replace')
 
 
-        
+
 
 
 # Example Usage
@@ -411,11 +411,14 @@ if __name__ == "__main__":
     import pstats
     from cProfile import Profile
 
-    train_data = "/media/nightking/WD-SN570/deep_learning/stanford_cs336/assignment1-basics/tests/fixtures/corpus.en"
+    train_data = "/media/nightking/WD-SN570/deep_learning/stanford_cs336/assignment1-basics/cs336_basics/data/TinyStoriesV2-GPT4-train.txt"
 
     with Profile() as prof:
-        i2b_vocab, merge_order = train(input_path=train_data, vocab_size=500, special_tokens=["<|endoftext|>"])
+        i2b_vocab, merge_order = train(input_path=train_data, vocab_size=10000, special_tokens=["<|endoftext|>"])
     prof.dump_stats("train.prof")
+
+    # Save the vocab and merge order
+    save_checkpoint(vocab=i2b_vocab, merges=merge_order)
 
     stats = pstats.Stats("train.prof")
     stats.sort_stats("cumtime").print_stats(15)      # top 15 by cumulative time
@@ -425,4 +428,3 @@ if __name__ == "__main__":
     # print("-"*54)
     # for key, value in i2b_vocab.items():
     #     print(f"{'Index':<10}: {key:>5} {'|':^5} {'Byte_String':<12}: {repr(value):>15}")
-
